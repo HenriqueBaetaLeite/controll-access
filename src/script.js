@@ -1,80 +1,101 @@
 const video = document.getElementById("video");
 
-const run = async () => {
-  console.log("running");
+const loadLabels = async () => {
+  const labels = ["Henrique_Baeta", "Joao", "Thatiane"];
+  return Promise.all(
+    labels.map(async (label) => {
+      const descriptions = [];
+      for (let index = 1; index <= 2; index++) {
+        const img = await faceapi.fetchImage(`./images/${label}/${index}.png`);
+        const detections = await faceapi
+          .detectSingleFace(img)
+          .withFaceLandmarks()
+          .withFaceDescriptor();
+        descriptions.push(detections.descriptor);
+      }
+
+      return new faceapi.LabeledFaceDescriptors(label, descriptions);
+    })
+  );
+};
+
+Promise.all([
+  faceapi.nets.tinyFaceDetector.loadFromUri("./models"),
+  faceapi.nets.faceRecognitionNet.loadFromUri("./models"),
+  faceapi.nets.faceLandmark68Net.loadFromUri("./models"),
+  faceapi.nets.faceExpressionNet.loadFromUri("./models"),
+  faceapi.nets.ssdMobilenetv1.loadFromUri("./models"),
+]).then(startVideo);
+
+async function startVideo() {
+  console.log("Video started");
   navigator.getUserMedia(
     { video: {} },
     (stream) => (video.srcObject = stream),
     (err) => console.error(err)
   );
+}
 
-  await Promise.all([
-    faceapi.nets.tinyFaceDetector.loadFromUri("./models"),
-    faceapi.nets.ssdMobilenetv1.loadFromUri("./models"),
-    faceapi.nets.faceLandmark68Net.loadFromUri("./models"),
-    faceapi.nets.faceRecognitionNet.loadFromUri("./models"),
-    faceapi.nets.faceExpressionNet.loadFromUri("./models"),
-  ]);
+video.addEventListener("play", async () => {
+  let recognized = false;
+  const canvas = faceapi.createCanvasFromMedia(video);
+  document.body.append(canvas);
 
-  //refFace = we KNOW this is Henrique Baeta
-  const refFace = await faceapi.fetchImage("./images/eu.png");
-  document.body.append(refFace);
+  const displaySize = { width: video.width, height: video.height };
 
-  console.log("refFace", refFace);
+  faceapi.matchDimensions(canvas, displaySize);
 
-  // const facesToCheck = await faceapi.fetchImage(
-  //   "https://upload.wikimedia.org/wikipedia/commons/thumb/7/71/JordanSmithWorthy2.jpg/170px-JordanSmithWorthy2.jpg"
-  // );
+  const labels = await loadLabels();
 
-  console.log("checking");
+  const referenceFace = await faceapi.fetchImage(
+    "./images/Henrique_Baeta/1.png"
+  );
+  // document.body.append(referenceFace);
 
-  const detections = await faceapi
-    .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
-    // .withFaceLandmarks()
-    // .withFaceDescriptors()
-    // .withFaceExpressions();
+  const detection = await faceapi.detectAllFaces(
+    referenceFace,
+    new faceapi.TinyFaceDetectorOptions()
+  );
 
-    console.log("detections", detections);
+  setInterval(async () => {
+    const detections = await faceapi
+      .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+      .withFaceLandmarks()
+      // .withFaceExpressions()
+      .withFaceDescriptors();
 
-  //we grab the reference image, and hand it to detectAllFaces method
-  let refFaceAiData = await faceapi
-    .detectAllFaces(refFace, new faceapi.TinyFaceDetectorOptions())
-    .withFaceLandmarks()
-    .withFaceDescriptors();
+    const resizedDetections = faceapi.resizeResults(detections, displaySize);
 
-    console.log("refFaceAiData", refFaceAiData);
+    const faceMatcher = new faceapi.FaceMatcher(labels, 0.6);
 
-  // let facesToCheckAiData = await faceapi
-  //   .detectAllFaces(detections)
-  //   .withFaceLandmarks()
-  //   .withFaceDescriptors();
+    const results = resizedDetections.map((d) =>
+      faceMatcher.findBestMatch(d.descriptor)
+    );
 
-  // console.log("here?", faceAIData);
+    canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
 
-  //get the canvas, and set it on top of the image
-  //and make it the same size
-  const canvas = document.getElementById("canvas");
-  faceapi.matchDimensions(canvas, detections);
+    faceapi.draw.drawDetections(canvas, resizedDetections);
+    // faceapi.draw.drawFaceExpressions(canvas, resizedDetections);
 
-  //we need to make a face matcher!!
-  //FaceMatcher is a constructor in faceapi
-  //we hand it our reference AI data
-  let faceMatcher = new faceapi.FaceMatcher(refFaceAiData);
-  facesToCheckAiData = faceapi.resizeResults(facesToCheckAiData, detections);
+    results.forEach((result, index) => {
+      const box = resizedDetections[index].detection.box;
+      const { label, distance } = result;
+      new faceapi.draw.DrawTextField(
+        [`${label} (${distance.toFixed(2)})`],
+        box.bottomLeft
+      ).draw(canvas);
 
-  //loop through all of hte faces in our imageToCheck and compare to our reference datta
-  detections.forEach((face) => {
-    const { detection, descriptor } = face;
-    //make a label, using the default
-    let label = faceMatcher.findBestMatch(descriptor).toString();
-    console.log(label);
-    if (label.includes("unknown")) {
-      return;
-    }
-    let options = { label: "Jordan" };
-    const drawBox = new faceapi.draw.DrawBox(detection.box, options);
-    drawBox.draw(canvas);
-  });
-};
 
-run();
+      if (label != "unknown") {
+        console.log("Pessoa identificada!");
+        recognized = true;
+        document.body.style.backgroundColor = "green";
+      }
+      else {
+        recognized = false;
+        document.body.style.backgroundColor = "red";
+      }
+    });
+  }, 500);
+
+});
